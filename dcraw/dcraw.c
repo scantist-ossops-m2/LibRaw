@@ -12828,10 +12828,16 @@ void CLASS parse_minolta (int base)
   if (fgetc(ifp) || fgetc(ifp)-'M' || fgetc(ifp)-'R') return;
   order = fgetc(ifp) * 0x101;
   offset = base + get4() + 8;
+#ifdef LIBRAW_LIBRARY_BUILD
+  if(offset>ifp->size()-8) // At least 8 bytes for tag/len
+    offset = ifp->size()-8;
+#endif
   while ((save=ftell(ifp)) < offset) {
     for (tag=i=0; i < 4; i++)
       tag = tag << 8 | fgetc(ifp);
     len = get4();
+    if(len < 0)
+      return; // just ignore wrong len?? or raise bad file exception?
     switch (tag) {
       case 0x505244:				/* PRD */
 	fseek (ifp, 8, SEEK_CUR);
@@ -13581,6 +13587,8 @@ void CLASS parse_qt (int end)
   while (ftell(ifp)+7 < end) {
     save = ftell(ifp);
     if ((size = get4()) < 8) return;
+    if ((int)size < 0) return; // 2+GB is too much
+    if (save + size < save) return; // 32bit overflow
     fread (tag, 4, 1, ifp);
     if (!memcmp(tag,"moov",4) ||
 	!memcmp(tag,"udta",4) ||
