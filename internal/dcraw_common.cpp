@@ -14851,7 +14851,7 @@ void CLASS parse_rollei()
   memset(&t, 0, sizeof t);
   do
   {
-    fgets(line, 128, ifp);
+    if(!fgets(line, 128, ifp)) break;
     if ((val = strchr(line, '=')))
       *val++ = 0;
     else
@@ -14889,6 +14889,7 @@ void CLASS parse_sinar_ia()
   order = 0x4949;
   fseek(ifp, 4, SEEK_SET);
   entries = get4();
+  if(entries < 1 || entries > 8192) return;
   fseek(ifp, get4(), SEEK_SET);
   while (entries--)
   {
@@ -18969,9 +18970,14 @@ void CLASS identify()
   {
     if (!load_raw)
       load_raw = &CLASS unpacked_load_raw;
-    if (is_raw > 1 && !shot_select && !half_size)
+    if (is_raw > 1 && !shot_select)
       filters = 0;
     maximum = 0x3fff;
+  }
+  else if(load_raw == &LibRaw::sinar_4shot_load_raw)
+  {
+    if (is_raw > 1 && !shot_select)
+      filters = 0;
   }
   else if (!strncmp(make, "Leaf", 4))
   {
@@ -19732,6 +19738,7 @@ dng_skip:
     if (maximum < 0x10000 && curve[maximum] > 0 && load_raw == &CLASS sony_arw2_load_raw)
       maximum = curve[maximum];
   }
+  if(maximum > 0xffff) maximum = 0xffff;
   if (!load_raw || height < 22 || width < 22 ||
 #ifdef LIBRAW_LIBRARY_BUILD
       (tiff_bps > 16 && load_raw != &LibRaw::deflate_dng_load_raw)
