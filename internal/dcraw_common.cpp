@@ -1228,9 +1228,14 @@ void CLASS pentax_load_raw()
 
 void CLASS nikon_coolscan_load_raw()
 {
-  int bufsize = width*3*tiff_bps/8;
-  if(tiff_bps <= 8)
-    gamma_curve(1.0/imgdata.params.coolscan_nef_gamma,0.,1,255);
+  if(!image)
+    throw LIBRAW_EXCEPTION_IO_CORRUPT;
+
+  int bypp = tiff_bps <= 8 ? 1 : 2;
+  int bufsize = width * 3 * bypp;
+
+  if (tiff_bps <= 8)
+    gamma_curve(1.0 / imgdata.params.coolscan_nef_gamma, 0., 1, 255);
   else
     gamma_curve(1.0/imgdata.params.coolscan_nef_gamma,0.,1,65535);
   fseek (ifp, data_offset, SEEK_SET);
@@ -1502,7 +1507,12 @@ void CLASS rollei_thumb()
 void CLASS rollei_load_raw()
 {
   uchar pixel[10];
-  unsigned iten=0, isix, i, buffer=0, todo[16];
+  unsigned iten = 0, isix, i, buffer = 0, todo[16];
+#ifdef LIBRAW_LIBRARY_BUILD
+  if(raw_width > 32767 || raw_height > 32767)
+    throw LIBRAW_EXCEPTION_IO_BADFILE;
+#endif
+  unsigned maxpixel = raw_width*(raw_height+7);
 
   isix = raw_width * raw_height * 5 / 8;
   while (fread (pixel, 1, 10, ifp) == 10) {
@@ -1518,8 +1528,11 @@ void CLASS rollei_load_raw()
       todo[i]   = isix++;
       todo[i+1] = buffer >> (14-i)*5;
     }
-    for (i=0; i < 16; i+=2)
-      raw_image[todo[i]] = (todo[i+1] & 0x3ff);
+    for (i = 0; i < 16; i += 2)
+      if(todo[i] < maxpixel)
+        raw_image[todo[i]] = (todo[i + 1] & 0x3ff);
+      else
+        derror();
   }
   maximum = 0x3ff;
 }
@@ -2468,7 +2481,7 @@ void CLASS panasonic_load_raw()
   int row, col, i, j, sh=0, pred[2], nonz[2];
 
   pana_bits(0);
-  for (row=0; row < height; row++)
+  for (row = 0; row < raw_height; row++)
   {
 #ifdef LIBRAW_LIBRARY_BUILD
     checkCancel();
@@ -2481,11 +2494,13 @@ void CLASS panasonic_load_raw()
 	if ((j = pana_bits(8))) {
 	  if ((pred[i & 1] -= 0x80 << sh) < 0 || sh == 4)
             pred[i & 1] &= ~((~0u) << sh);
-	  pred[i & 1] += j << sh;
-	}
-      } else if ((nonz[i & 1] = pana_bits(8)) || i > 11)
-	pred[i & 1] = nonz[i & 1] << 4 | pana_bits(4);
-      if ((RAW(row,col) = pred[col & 1]) > 4098 && col < width) derror();
+          pred[i & 1] += j << sh;
+        }
+      }
+      else if ((nonz[i & 1] = pana_bits(8)) || i > 11)
+        pred[i & 1] = nonz[i & 1] << 4 | pana_bits(4);
+      if ((RAW(row, col) = pred[col & 1]) > 4098 && col < width && row < height)
+        derror();
     }
   }
 }
@@ -3506,6 +3521,11 @@ void CLASS sony_arw2_load_raw()
 void CLASS samsung_load_raw()
 {
   int row, col, c, i, dir, op[4], len[4];
+#ifdef LIBRAW_LIBRARY_BUILD
+  if(raw_width> 32768 || raw_height > 32768)  // definitely too much for old samsung
+    throw LIBRAW_EXCEPTION_IO_BADFILE;
+#endif
+  unsigned maxpixels = raw_width*(raw_height+7);
 
   order = 0x4949;
   for (row=0; row < raw_height; row++) {
@@ -3524,11 +3544,17 @@ void CLASS samsung_load_raw()
 	case 2: len[c]--;		break;
 	case 1: len[c]++;
       }
-      for (c=0; c < 16; c+=2) {
-	i = len[((c & 1) << 1) | (c >> 3)];
-        RAW(row,col+c) = ((signed) ph1_bits(i) << (32-i) >> (32-i)) +
-	  (dir ? RAW(row+(~c | -2),col+c) : col ? RAW(row,col+(c | -2)) : 128);
-	if (c == 14) c = -1;
+      for (c = 0; c < 16; c += 2)
+      {
+        i = len[((c & 1) << 1) | (c >> 3)];
+	unsigned idest = RAWINDEX(row, col + c);
+	unsigned isrc = (dir ? RAWINDEX(row + (~c | -2), col + c) : col ? RAWINDEX(row, col + (c | -2)) : 0);
+	if(idest < maxpixels && isrc < maxpixels) // less than zero is handled by unsigned conversion
+  	RAW(row, col + c) = ((signed)ph1_bits(i) << (32 - i) >> (32 - i)) + 			                (dir ? RAW(row + (~c | -2), col + c) : col ? RAW(row, col + (c | -2)) : 128);
+	else
+  	  derror();
+        if (c == 14)
+          c = -1;
       }
     }
   }
@@ -9778,37 +9804,68 @@ void CLASS parse_exif (int base)
        if (((make[0] == '\0') && (!strncmp(model, "ov5647",6))) ||
            ((!strncmp(make, "RaspberryPi",11)) && (!strncmp(model, "RP_OV5647",9))) ||
            ((!strncmp(make, "RaspberryPi",11)) && (!strncmp(model, "RP_imx219",9)))) {
-         char mn_text[512];
-         char* pos;
-         char ccms[512];
-         ushort l;
-         float num;
+        char mn_text[512];
+        char *pos;
+        char ccms[512];
+        ushort l;
+        float num;
 
-         fgets(mn_text, len, ifp);
-         pos = strstr(mn_text, "gain_r=");
-         if (pos) cam_mul[0] = atof(pos+7);
-         pos = strstr(mn_text, "gain_b=");
-         if (pos) cam_mul[2] = atof(pos+7);
-         if ((cam_mul[0] > 0.001f) && (cam_mul[2] > 0.001f)) cam_mul[1] = cam_mul[3] = 1.0f;
-         else cam_mul[0] = cam_mul[2] = 0.0f;
+	fgets(mn_text, MIN(len,511), ifp);
+        mn_text[511] = 0;
 
-         pos = strstr(mn_text, "ccm=") + 4;
-         l = strstr(pos, " ") - pos;
-         memcpy (ccms, pos, l);
-         ccms[l] = '\0';
+        pos = strstr(mn_text, "gain_r=");
+        if (pos)
+          cam_mul[0] = atof(pos + 7);
+        pos = strstr(mn_text, "gain_b=");
+        if (pos)
+          cam_mul[2] = atof(pos + 7);
+        if ((cam_mul[0] > 0.001f) && (cam_mul[2] > 0.001f))
+          cam_mul[1] = cam_mul[3] = 1.0f;
+        else
+          cam_mul[0] = cam_mul[2] = 0.0f;
 
-         pos = strtok (ccms, ",");
-         for (l=0; l<4; l++) {
-           num = 0.0;
-           for (c=0; c<3; c++) {
-             imgdata.color.ccm[l][c] = (float)atoi(pos);
-             num += imgdata.color.ccm[l][c];
-             pos = strtok (NULL, ",");
-           }
-           if (num > 0.01) FORC3 imgdata.color.ccm[l][c] = imgdata.color.ccm[l][c] / num;
-         }
+        pos = strstr(mn_text, "ccm=");
+        if(pos)
+        {
+         pos +=4;
+         char *pos2 = strstr(pos, " ");
+         if(pos2)
+         {
+           l = pos2 - pos;
+           memcpy(ccms, pos, l);
+           ccms[l] = '\0';
+#if defined WIN32 || defined(__MINGW32__)
+           // Win32 strtok is already thread-safe
+          pos = strtok(ccms, ",");
+#else
+          char *last=0;
+          pos = strtok_r(ccms, ",",&last);
+#endif
+          if(pos)
+          {
+            for (l = 0; l < 4; l++)
+            {
+              num = 0.0;
+              for (c = 0; c < 3; c++)
+              {
+                imgdata.color.ccm[l][c] = (float)atoi(pos);
+                num += imgdata.color.ccm[l][c];
+#if defined WIN32 || defined(__MINGW32__)
+                pos = strtok(NULL, ",");
+#else
+                pos = strtok_r(NULL, ",",&last);
+#endif
+                if(!pos) goto end; // broken
+              }
+              if (num > 0.01)
+                FORC3 imgdata.color.ccm[l][c] = imgdata.color.ccm[l][c] / num;
+            }
+          }
+        }
        }
-       else
+      end:;
+      }
+      else
 #endif
         parse_makernote (base, 0);
        break;
@@ -11458,10 +11515,16 @@ void CLASS parse_minolta (int base)
   if (fgetc(ifp) || fgetc(ifp)-'M' || fgetc(ifp)-'R') return;
   order = fgetc(ifp) * 0x101;
   offset = base + get4() + 8;
+#ifdef LIBRAW_LIBRARY_BUILD
+  if(offset>ifp->size()-8) // At least 8 bytes for tag/len
+    offset = ifp->size()-8;
+#endif
   while ((save=ftell(ifp)) < offset) {
     for (tag=i=0; i < 4; i++)
       tag = tag << 8 | fgetc(ifp);
     len = get4();
+    if(len < 0)
+      return; // just ignore wrong len?? or raise bad file exception?
     switch (tag) {
       case 0x505244:				/* PRD */
 	fseek (ifp, 8, SEEK_CUR);
@@ -12053,8 +12116,13 @@ void CLASS parse_fuji (int offset)
 
   fseek (ifp, offset, SEEK_SET);
   entries = get4();
-  if (entries > 255) return;
-  while (entries--) {
+  if (entries > 255)
+    return;
+#ifdef LIBRAW_LIBRARY_BUILD
+  imgdata.process_warnings |=  LIBRAW_WARN_PARSEFUJI_PROCESSED; 
+#endif
+  while (entries--)
+  {
     tag = get2();
     len = get2();
     save = ftell(ifp);
@@ -12198,6 +12266,8 @@ void CLASS parse_qt (int end)
   while (ftell(ifp)+7 < end) {
     save = ftell(ifp);
     if ((size = get4()) < 8) return;
+    if ((int)size < 0) return; // 2+GB is too much
+    if (save + size < save) return; // 32bit overflow
     fread (tag, 4, 1, ifp);
     if (!memcmp(tag,"moov",4) ||
 	!memcmp(tag,"udta",4) ||
@@ -13609,7 +13679,8 @@ float CLASS find_green (int bps, int bite, int off0, int off1)
   UINT64 bitbuf=0;
   int vbits, col, i, c;
   ushort img[2][2064];
-  double sum[]={0,0};
+  double sum[] = {0, 0};
+  if(width > 2064) return 0.f; // too wide
 
   FORC(2) {
     fseek (ifp, c ? off1:off0, SEEK_SET);
@@ -13632,14 +13703,16 @@ float CLASS find_green (int bps, int bite, int off0, int off1)
 #ifdef LIBRAW_LIBRARY_BUILD
 static void remove_trailing_spaces(char *string, size_t len)
 {
-  if(len<1) return; // not needed, b/c sizeof of make/model is 64
-  string[len-1]=0;
-  if(len<3) return; // also not needed
-  len = strnlen(string,len-1);
-  for(int i=len-1; i>=0; i--)
+  if (len < 1)
+    return; // not needed, b/c sizeof of make/model is 64
+  string[len - 1] = 0;
+  if (len < 3)
+    return; // also not needed
+  len = strnlen(string, len - 1);
+  for (int i = len - 1; i >= 0; i--)
   {
-    if(isspace(string[i]))
-      string[i]=0;
+    if (isspace((unsigned char)string[i]))
+      string[i] = 0;
     else
       break;
   }
@@ -15362,7 +15435,13 @@ dng_skip:
   if (load_raw == &CLASS kodak_radc_load_raw)
     if (raw_color) adobe_coeff ("Apple","Quicktake");
 
-  if (fuji_width) {
+#ifdef LIBRAW_LIBRARY_BUILD
+  // Clear erorneus fuji_width if not set through parse_fuji or for DNG
+  if(fuji_width && !dng_version && !(imgdata.process_warnings & LIBRAW_WARN_PARSEFUJI_PROCESSED ))
+     fuji_width = 0;
+#endif
+  if (fuji_width)
+  {
     fuji_width = width >> !fuji_layout;
     filters = fuji_width & 1 ? 0x94949494 : 0x49494949;
     width = (height >> fuji_layout) + fuji_width;
