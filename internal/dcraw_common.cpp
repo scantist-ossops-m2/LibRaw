@@ -2819,6 +2819,10 @@ void CLASS smal_decode_segment (unsigned seg[2][2], int holes)
       diff = diff ? -diff : 0x80;
     if (ftell(ifp) + 12 >= seg[1][1])
       diff = 0;
+#ifdef LIBRAW_LIBRARY_BUILD
+    if(pix>=raw_width*raw_height)
+      throw LIBRAW_EXCEPTION_IO_CORRUPT;
+#endif
     raw_image[pix] = pred[pix & 1] += diff;
     if (!(pix & 1) && HOLE(pix / raw_width)) pix += 2;
   }
@@ -6043,10 +6047,16 @@ void CLASS parse_minolta (int base)
   if (fgetc(ifp) || fgetc(ifp)-'M' || fgetc(ifp)-'R') return;
   order = fgetc(ifp) * 0x101;
   offset = base + get4() + 8;
+#ifdef LIBRAW_LIBRARY_BUILD
+  if(offset>ifp->size()-8) // At least 8 bytes for tag/len
+    offset = ifp->size()-8;
+#endif
   while ((save=ftell(ifp)) < offset) {
     for (tag=i=0; i < 4; i++)
       tag = tag << 8 | fgetc(ifp);
     len = get4();
+    if(len < 0)
+      return; // just ignore wrong len?? or raise bad file exception?
     switch (tag) {
       case 0x505244:				/* PRD */
 	fseek (ifp, 8, SEEK_CUR);
