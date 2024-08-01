@@ -12395,6 +12395,8 @@ void CLASS parse_qt (int end)
   while (ftell(ifp)+7 < end) {
     save = ftell(ifp);
     if ((size = get4()) < 8) return;
+    if ((int)size < 0) return; // 2+GB is too much
+    if (save + size < save) return; // 32bit overflow
     fread (tag, 4, 1, ifp);
     if (!memcmp(tag,"moov",4) ||
 	!memcmp(tag,"udta",4) ||
@@ -14397,7 +14399,10 @@ void CLASS identify()
 #endif
 	switch (tiff_bps = i*8 / (width * height)) {
 	case  8: load_raw = &CLASS eight_bit_load_raw;  break;
-	case 10: load_raw = &CLASS nokia_load_raw;
+	case 10: load_raw = &CLASS nokia_load_raw; break;
+#ifdef LIBRAW_LIBRARY_BUILD
+        case 0:  throw LIBRAW_EXCEPTION_IO_CORRUPT; break;
+#endif
 	}
 	raw_height = height + (top_margin = i / (width * tiff_bps/8) - height);
 	mask[0][3] = 1;
