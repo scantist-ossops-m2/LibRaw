@@ -11677,7 +11677,7 @@ void CLASS parse_makernote(int base, int uptag)
             else
               year += 1900;
 
-            ynum_len = (int)strnlen(words[i], sizeof(imgdata.shootinginfo.InternalBodySerial) - 1) - 18;
+            ynum_len = MIN((sizeof(ynum)-1), (int)strnlen(words[i], sizeof(imgdata.shootinginfo.InternalBodySerial) - 1) - 18);
             strncpy(ynum, words[i], ynum_len);
             ynum[ynum_len] = 0;
             for (int j = 0; ynum[j] && ynum[j + 1] && sscanf(ynum + j, "%2x", &c); j += 2)
@@ -20495,9 +20495,14 @@ void CLASS identify()
   {
     if (!load_raw)
       load_raw = &CLASS unpacked_load_raw;
-    if (is_raw > 1 && !shot_select && !half_size)
+    if (is_raw > 1 && !shot_select)
       filters = 0;
     maximum = 0x3fff;
+  }
+  else if(load_raw == &LibRaw::sinar_4shot_load_raw)
+  {
+    if (is_raw > 1 && !shot_select)
+      filters = 0;
   }
   else if (!strncmp(make, "Leaf", 4))
   {
